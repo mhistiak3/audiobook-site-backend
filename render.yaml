@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: audiobook-downloader
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 3001
+      - key: NODE_ENV
+        value: production
+      - key: ALLOWED_ORIGINS
+        # Set this to your live site URL in the Render dashboard
+        # e.g. https://your-app.vercel.app,https://yourdomain.com
+        sync: false

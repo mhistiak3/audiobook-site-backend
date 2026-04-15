@@ -1,0 +1,22 @@
+{
+  "name": "audiobook-site-backend",
+  "version": "1.0.0",
+  "description": "Audio download backend for iAudioBook — uses yt-dlp to extract and stream YouTube audio",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "nodemon server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "yt-dlp-exec": "^1.0.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
