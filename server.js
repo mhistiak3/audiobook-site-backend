@@ -1,33 +1,50 @@
 const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
-const ytDlp = require("yt-dlp-exec");
-const { execSync } = require("child_process");
+const { create: createYtDlp } = require("yt-dlp-exec");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+const https = require("https");
 
-// ─── AUTO-UPDATE yt-dlp BINARY ───────────────────────────────────────────────
-// yt-dlp updates frequently to keep up with YouTube changes.
-// Stale binary = fails on many videos. Update on every cold start.
-try {
-  const pkgRoot = path.dirname(require.resolve("yt-dlp-exec/package.json"));
-  // Linux (Render) = yt-dlp, macOS = yt-dlp_macos, Windows = yt-dlp.exe
-  const binName = process.platform === "win32" ? "yt-dlp.exe"
-    : process.platform === "darwin" ? "yt-dlp_macos"
-    : "yt-dlp";
-  const binPath = path.join(pkgRoot, "bin", binName);
+// ─── DOWNLOAD LATEST yt-dlp TO /tmp ──────────────────────────────────────────
+// Render node_modules is read-only — can't update in place.
+// Download fresh binary to writable /tmp on every cold start.
+// This ensures we always have the latest yt-dlp (YouTube breaks old versions).
 
-  if (fs.existsSync(binPath)) {
-    console.log("[yt-dlp] updating binary at", binPath);
-    execSync(`"${binPath}" -U`, { stdio: "pipe", timeout: 60_000 });
-    console.log("[yt-dlp] binary up to date");
-  } else {
-    console.warn("[yt-dlp] binary not found at", binPath);
-  }
-} catch (e) {
-  console.warn("[yt-dlp] auto-update skipped:", e.message?.slice(0, 120));
+const YTDLP_BIN = path.join(os.tmpdir(), "yt-dlp");
+const YTDLP_URL = "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp";
+
+async function downloadYtDlp() {
+  return new Promise((resolve, reject) => {
+    console.log("[yt-dlp] downloading latest binary...");
+    const file = fs.createWriteStream(YTDLP_BIN);
+
+    const follow = (url) => {
+      https.get(url, (res) => {
+        // Follow redirects (GitHub releases redirect)
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          return follow(res.headers.location);
+        }
+        if (res.statusCode !== 200) {
+          return reject(new Error(`Download failed: HTTP ${res.statusCode}`));
+        }
+        res.pipe(file);
+        file.on("finish", () => {
+          file.close();
+          fs.chmodSync(YTDLP_BIN, "755");
+          console.log("[yt-dlp] binary ready at", YTDLP_BIN);
+          resolve();
+        });
+      }).on("error", reject);
+    };
+
+    follow(YTDLP_URL);
+  });
 }
+
+// ytDlp instance using the fresh binary — set after download
+let ytDlp;
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -288,7 +305,22 @@ app.use((_req, res) => {
 });
 
 // ─── START ───────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
-  console.log(`audiobook-downloader running on port ${PORT}`);
-  console.log(`Allowed origins: ${allowedOrigins.join(", ")}`);
-});
+(async () => {
+  try {
+    await downloadYtDlp();
+  } catch (e) {
+    // Download failed — fall back to bundled binary from yt-dlp-exec
+    console.warn("[yt-dlp] fresh download failed, using bundled binary:", e.message);
+    const pkgRoot = path.dirname(require.resolve("yt-dlp-exec/package.json"));
+    const bundled = path.join(pkgRoot, "bin", "yt-dlp");
+    Object.assign(module.exports, { YTDLP_BIN: bundled });
+  }
+
+  // Create ytDlp instance pointing to the binary we just downloaded
+  ytDlp = createYtDlp(YTDLP_BIN);
+
+  app.listen(PORT, () => {
+    console.log(`audiobook-downloader running on port ${PORT}`);
+    console.log(`Allowed origins: ${allowedOrigins.join(", ")}`);
+  });
+})();
