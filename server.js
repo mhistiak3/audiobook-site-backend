@@ -2,9 +2,32 @@ const express = require("express");
 const cors = require("cors");
 const rateLimit = require("express-rate-limit");
 const ytDlp = require("yt-dlp-exec");
+const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const os = require("os");
+
+// ─── AUTO-UPDATE yt-dlp BINARY ───────────────────────────────────────────────
+// yt-dlp updates frequently to keep up with YouTube changes.
+// Stale binary = fails on many videos. Update on every cold start.
+try {
+  const pkgRoot = path.dirname(require.resolve("yt-dlp-exec/package.json"));
+  // Linux (Render) = yt-dlp, macOS = yt-dlp_macos, Windows = yt-dlp.exe
+  const binName = process.platform === "win32" ? "yt-dlp.exe"
+    : process.platform === "darwin" ? "yt-dlp_macos"
+    : "yt-dlp";
+  const binPath = path.join(pkgRoot, "bin", binName);
+
+  if (fs.existsSync(binPath)) {
+    console.log("[yt-dlp] updating binary at", binPath);
+    execSync(`"${binPath}" -U`, { stdio: "pipe", timeout: 60_000 });
+    console.log("[yt-dlp] binary up to date");
+  } else {
+    console.warn("[yt-dlp] binary not found at", binPath);
+  }
+} catch (e) {
+  console.warn("[yt-dlp] auto-update skipped:", e.message?.slice(0, 120));
+}
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -131,8 +154,18 @@ app.post("/api/video-info", async (req, res) => {
     if (/copyright/i.test(err.message)) {
       return res.status(400).json({ error: "Video blocked due to copyright.", code: "COPYRIGHT" });
     }
+    if (/sign in/i.test(err.message) || /login/i.test(err.message)) {
+      return res.status(400).json({ error: "Video requires sign-in.", code: "LOGIN_REQUIRED" });
+    }
+    if (/confirm your age/i.test(err.message) || /age.restrict/i.test(err.message)) {
+      return res.status(400).json({ error: "Age-restricted video.", code: "AGE_RESTRICTED" });
+    }
 
-    return res.status(500).json({ error: "Failed to fetch video info. Please try again." });
+    // Always include yt-dlp detail so we can diagnose from response
+    return res.status(500).json({
+      error: "Failed to fetch video info. Please try again.",
+      detail: err.message,
+    });
   }
 });
 
